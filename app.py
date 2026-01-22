@@ -21,7 +21,7 @@ if not api_key:
             st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 # 사용자 자본금 설정 (기본값 100만원)
 CAPITAL = 1000000 
@@ -140,5 +140,6 @@ with tab2:
                 st.write(response)
 
                 st.session_state.messages.append({"role": "assistant", "content": response})
+
 
 
