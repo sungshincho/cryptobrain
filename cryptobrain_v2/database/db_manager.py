@@ -134,6 +134,60 @@ class DBManager:
                 )
             """)
 
+            # 임포트된 거래 테이블 (CSV 데이터)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS imported_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    exchange TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT DEFAULT 'KRW',
+                    trade_type TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    price REAL NOT NULL,
+                    total_amount REAL NOT NULL,
+                    fee REAL DEFAULT 0,
+                    timestamp TIMESTAMP NOT NULL,
+                    order_id TEXT,
+                    realized_pnl REAL,
+                    avg_buy_price REAL,
+                    import_batch_id TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # 임포트 배치 테이블 (임포트 이력)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS import_batches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT NOT NULL UNIQUE,
+                    exchange TEXT NOT NULL,
+                    file_name TEXT,
+                    total_rows INTEGER DEFAULT 0,
+                    parsed_rows INTEGER DEFAULT 0,
+                    skipped_rows INTEGER DEFAULT 0,
+                    total_buy_amount REAL DEFAULT 0,
+                    total_sell_amount REAL DEFAULT 0,
+                    total_fee REAL DEFAULT 0,
+                    date_range_start TIMESTAMP,
+                    date_range_end TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # 인덱스 생성
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_imported_trades_symbol
+                ON imported_trades(symbol)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_imported_trades_timestamp
+                ON imported_trades(timestamp)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_imported_trades_batch
+                ON imported_trades(import_batch_id)
+            """)
+
     # ==================== Profile CRUD ====================
 
     def get_profile(self) -> Optional[InvestorProfile]:
@@ -620,6 +674,329 @@ class DBManager:
                 (symbol,)
             )
             return cursor.fetchone() is not None
+
+    # ==================== Imported Trades CRUD ====================
+
+    def save_imported_trades(
+        self,
+        trades: list,
+        exchange: str,
+        file_name: str = "",
+        batch_id: Optional[str] = None
+    ) -> dict:
+        """
+        임포트된 거래 데이터 저장
+
+        Args:
+            trades: ParsedTrade 객체 리스트
+            exchange: 거래소명
+            file_name: 원본 파일명
+            batch_id: 배치 ID (없으면 자동 생성)
+
+        Returns:
+            dict: 저장 결과 {batch_id, saved_count}
+        """
+        import uuid
+
+        if not batch_id:
+            batch_id = str(uuid.uuid4())[:8]
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            saved_count = 0
+
+            # 거래 데이터 저장
+            for trade in trades:
+                try:
+                    # trade가 dict인지 객체인지 확인
+                    if hasattr(trade, 'to_dict'):
+                        data = trade.to_dict()
+                    else:
+                        data = trade
+
+                    cursor.execute("""
+                        INSERT INTO imported_trades (
+                            exchange, symbol, market, trade_type,
+                            quantity, price, total_amount, fee,
+                            timestamp, order_id, realized_pnl, avg_buy_price,
+                            import_batch_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        exchange,
+                        data.get("symbol", ""),
+                        data.get("market", "KRW"),
+                        data.get("trade_type", ""),
+                        data.get("quantity", 0),
+                        data.get("price", 0),
+                        data.get("total_amount", 0),
+                        data.get("fee", 0),
+                        data.get("timestamp"),
+                        data.get("order_id"),
+                        data.get("realized_pnl"),
+                        data.get("avg_buy_price"),
+                        batch_id,
+                    ))
+                    saved_count += 1
+                except Exception as e:
+                    print(f"Trade save error: {e}")
+                    continue
+
+            # 배치 정보 저장
+            total_buy = sum(
+                t.total_amount if hasattr(t, 'total_amount') else t.get("total_amount", 0)
+                for t in trades
+                if (t.trade_type.value if hasattr(t, 'trade_type') and hasattr(t.trade_type, 'value')
+                    else t.get("trade_type", "")) == "buy"
+            )
+            total_sell = sum(
+                t.total_amount if hasattr(t, 'total_amount') else t.get("total_amount", 0)
+                for t in trades
+                if (t.trade_type.value if hasattr(t, 'trade_type') and hasattr(t.trade_type, 'value')
+                    else t.get("trade_type", "")) == "sell"
+            )
+            total_fee = sum(
+                t.fee if hasattr(t, 'fee') else t.get("fee", 0)
+                for t in trades
+            )
+
+            # 날짜 범위 계산
+            timestamps = []
+            for t in trades:
+                ts = t.timestamp if hasattr(t, 'timestamp') else t.get("timestamp")
+                if ts:
+                    timestamps.append(ts)
+
+            date_start = min(timestamps) if timestamps else None
+            date_end = max(timestamps) if timestamps else None
+
+            cursor.execute("""
+                INSERT INTO import_batches (
+                    batch_id, exchange, file_name,
+                    total_rows, parsed_rows, skipped_rows,
+                    total_buy_amount, total_sell_amount, total_fee,
+                    date_range_start, date_range_end
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                batch_id,
+                exchange,
+                file_name,
+                len(trades),
+                saved_count,
+                len(trades) - saved_count,
+                total_buy,
+                total_sell,
+                total_fee,
+                date_start,
+                date_end,
+            ))
+
+            return {"batch_id": batch_id, "saved_count": saved_count}
+
+    def get_imported_trades(
+        self,
+        symbol: Optional[str] = None,
+        exchange: Optional[str] = None,
+        trade_type: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> list[dict]:
+        """
+        임포트된 거래 조회
+
+        Args:
+            symbol: 필터링할 심볼
+            exchange: 거래소 필터
+            trade_type: 'buy' 또는 'sell'
+            batch_id: 배치 ID 필터
+            start_date: 시작일
+            end_date: 종료일
+            limit: 최대 결과 수
+            offset: 시작 위치
+
+        Returns:
+            list[dict]: 거래 목록
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = "SELECT * FROM imported_trades WHERE 1=1"
+            params = []
+
+            if symbol:
+                query += " AND symbol = ?"
+                params.append(symbol)
+
+            if exchange:
+                query += " AND exchange = ?"
+                params.append(exchange)
+
+            if trade_type:
+                query += " AND trade_type = ?"
+                params.append(trade_type)
+
+            if batch_id:
+                query += " AND import_batch_id = ?"
+                params.append(batch_id)
+
+            if start_date:
+                query += " AND timestamp >= ?"
+                params.append(start_date.isoformat() if isinstance(start_date, datetime) else start_date)
+
+            if end_date:
+                query += " AND timestamp <= ?"
+                params.append(end_date.isoformat() if isinstance(end_date, datetime) else end_date)
+
+            query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            return [dict(row) for row in rows]
+
+    def get_import_batches(self, limit: int = 20) -> list[dict]:
+        """임포트 배치 이력 조회"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM import_batches
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_import_batch(self, batch_id: str) -> bool:
+        """임포트 배치 삭제 (해당 거래 데이터도 함께 삭제)"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 거래 데이터 삭제
+            cursor.execute(
+                "DELETE FROM imported_trades WHERE import_batch_id = ?",
+                (batch_id,)
+            )
+            deleted_trades = cursor.rowcount
+
+            # 배치 정보 삭제
+            cursor.execute(
+                "DELETE FROM import_batches WHERE batch_id = ?",
+                (batch_id,)
+            )
+
+            return deleted_trades > 0
+
+    def get_imported_trade_stats(
+        self,
+        symbol: Optional[str] = None,
+        exchange: Optional[str] = None
+    ) -> dict:
+        """
+        임포트된 거래 통계
+
+        Args:
+            symbol: 특정 심볼 필터
+            exchange: 거래소 필터
+
+        Returns:
+            dict: 통계 데이터
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            where_clause = "WHERE 1=1"
+            params = []
+
+            if symbol:
+                where_clause += " AND symbol = ?"
+                params.append(symbol)
+
+            if exchange:
+                where_clause += " AND exchange = ?"
+                params.append(exchange)
+
+            # 기본 통계
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) as total_trades,
+                    COUNT(DISTINCT symbol) as unique_symbols,
+                    SUM(CASE WHEN trade_type = 'buy' THEN total_amount ELSE 0 END) as total_buy_amount,
+                    SUM(CASE WHEN trade_type = 'sell' THEN total_amount ELSE 0 END) as total_sell_amount,
+                    SUM(fee) as total_fee,
+                    SUM(CASE WHEN trade_type = 'sell' AND realized_pnl IS NOT NULL THEN realized_pnl ELSE 0 END) as total_realized_pnl,
+                    MIN(timestamp) as first_trade_date,
+                    MAX(timestamp) as last_trade_date
+                FROM imported_trades
+                {where_clause}
+            """, params)
+            row = cursor.fetchone()
+
+            # 수익/손실 거래 수
+            cursor.execute(f"""
+                SELECT
+                    COUNT(CASE WHEN realized_pnl > 0 THEN 1 END) as win_count,
+                    COUNT(CASE WHEN realized_pnl < 0 THEN 1 END) as loss_count,
+                    AVG(CASE WHEN realized_pnl > 0 THEN realized_pnl END) as avg_win,
+                    AVG(CASE WHEN realized_pnl < 0 THEN realized_pnl END) as avg_loss
+                FROM imported_trades
+                {where_clause} AND trade_type = 'sell' AND realized_pnl IS NOT NULL
+            """, params)
+            pnl_row = cursor.fetchone()
+
+            win_count = pnl_row["win_count"] or 0
+            loss_count = pnl_row["loss_count"] or 0
+            total_closed = win_count + loss_count
+
+            return {
+                "total_trades": row["total_trades"] or 0,
+                "unique_symbols": row["unique_symbols"] or 0,
+                "total_buy_amount": row["total_buy_amount"] or 0,
+                "total_sell_amount": row["total_sell_amount"] or 0,
+                "total_fee": row["total_fee"] or 0,
+                "total_realized_pnl": row["total_realized_pnl"] or 0,
+                "first_trade_date": row["first_trade_date"],
+                "last_trade_date": row["last_trade_date"],
+                "win_count": win_count,
+                "loss_count": loss_count,
+                "win_rate": (win_count / total_closed * 100) if total_closed > 0 else 0,
+                "avg_win": pnl_row["avg_win"] or 0,
+                "avg_loss": pnl_row["avg_loss"] or 0,
+            }
+
+    def get_symbol_summary_from_imports(self) -> list[dict]:
+        """임포트 데이터 기반 종목별 요약"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    symbol,
+                    SUM(CASE WHEN trade_type = 'buy' THEN quantity ELSE 0 END) as total_bought,
+                    SUM(CASE WHEN trade_type = 'sell' THEN quantity ELSE 0 END) as total_sold,
+                    SUM(CASE WHEN trade_type = 'buy' THEN total_amount ELSE 0 END) as total_buy_amount,
+                    SUM(CASE WHEN trade_type = 'sell' THEN total_amount ELSE 0 END) as total_sell_amount,
+                    SUM(CASE WHEN trade_type = 'sell' THEN realized_pnl ELSE 0 END) as total_pnl,
+                    COUNT(*) as trade_count,
+                    MAX(timestamp) as last_trade_date
+                FROM imported_trades
+                GROUP BY symbol
+                ORDER BY total_buy_amount DESC
+            """)
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                data = dict(row)
+                data["current_quantity"] = (data["total_bought"] or 0) - (data["total_sold"] or 0)
+                if data["total_bought"] and data["total_bought"] > 0:
+                    data["avg_buy_price"] = (data["total_buy_amount"] or 0) / data["total_bought"]
+                else:
+                    data["avg_buy_price"] = 0
+                results.append(data)
+
+            return results
 
 
 if __name__ == "__main__":

@@ -332,15 +332,22 @@ def render_journal_page():
     render_journal()
 
 
+def render_data_import_page():
+    """데이터 임포트 페이지 렌더링"""
+    from cryptobrain_v2.ui.pages.data_import import render_data_import_page as render_import
+    render_import()
+
+
 def main():
     """메인 함수"""
     init_session_state()
     render_sidebar()
 
     # 탭 구성
-    tab_dashboard, tab_ai, tab_profile, tab_portfolio, tab_journal = st.tabs([
+    tab_dashboard, tab_ai, tab_import, tab_profile, tab_portfolio, tab_journal = st.tabs([
         "📊 대시보드",
         "🤖 AI 분석",
+        "📥 데이터 임포트",
         "⚙️ 프로필",
         "💼 포트폴리오",
         "📝 매매일지"
@@ -351,6 +358,9 @@ def main():
 
     with tab_ai:
         render_ai_analysis()
+
+    with tab_import:
+        render_data_import_page()
 
     with tab_profile:
         render_profile_page()
