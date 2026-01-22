@@ -21,7 +21,7 @@ if not api_key:
             st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-pro-latest')
+model = genai.GenerativeModel('gemini-1.5-pro')
 
 # 사용자 자본금 설정 (기본값 100만원)
 CAPITAL = 1000000 
@@ -138,4 +138,5 @@ with tab2:
             with st.spinner("생각 중..."):
                 response = ask_ai(prompt, context_str)
                 st.write(response)
+
                 st.session_state.messages.append({"role": "assistant", "content": response})
