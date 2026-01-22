@@ -1,0 +1,27 @@
+# CryptoBrain V2 - 의존성 목록
+
+# Web Framework
+streamlit>=1.28.0
+
+# AI/ML
+google-generativeai>=0.8.3
+
+# Data & Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Cryptocurrency Exchange
+ccxt>=4.0.0
+
+# Visualization
+plotly>=5.18.0
+mplfinance>=0.12.10b0
+
+# Database
+# SQLite는 Python 표준 라이브러리에 포함
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Optional: Telegram Alerts
+# python-telegram-bot>=20.0
