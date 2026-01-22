@@ -338,14 +338,21 @@ def render_data_import_page():
     render_import()
 
 
+def render_rational_trader_page():
+    """이성적 트레이더 페이지 (V3)"""
+    from cryptobrain_v2.ui.pages.rational_trader import render_rational_trader_page as render_rational
+    render_rational()
+
+
 def main():
     """메인 함수"""
     init_session_state()
     render_sidebar()
 
     # 탭 구성
-    tab_dashboard, tab_ai, tab_import, tab_profile, tab_portfolio, tab_journal = st.tabs([
+    tab_dashboard, tab_rational, tab_ai, tab_import, tab_profile, tab_portfolio, tab_journal = st.tabs([
         "📊 대시보드",
+        "🧠 이성적 트레이더",
         "🤖 AI 분석",
         "📥 데이터 임포트",
         "⚙️ 프로필",
@@ -355,6 +362,9 @@ def main():
 
     with tab_dashboard:
         render_dashboard()
+
+    with tab_rational:
+        render_rational_trader_page()
 
     with tab_ai:
         render_ai_analysis()
