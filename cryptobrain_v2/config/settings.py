@@ -14,7 +14,7 @@ DB_PATH = BASE_DIR / "cryptobrain.db"
 # API 설정
 # ====================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GEMINI_MODEL = "gemini-1.5-pro"  # 또는 gemini-2.0-flash-exp
+GEMINI_MODEL = "gemini-3-flash-preview"
 
 # ====================
 # 거래소 설정
